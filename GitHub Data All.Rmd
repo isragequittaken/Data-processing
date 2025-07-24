@@ -1,0 +1,650 @@
+---
+title: "Cognitive Flexibility Master Data Management"
+author: "Hayley"
+date: "7/17/2024"
+output: html_document
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+##Load Packages
+```{r loading packages, echo=FALSE}
+knitr::opts_chunk$set(echo = TRUE, root.dir = "~/Data - Dissertation/Task Data/")
+library(tidyverse)
+library(readxl) #Has read_xlsx
+library(writexl)
+library(tidyxl) #this contains xlsx_cells
+#library(plyr)												
+library(readr)
+library(dplyr)
+library(psych)
+library(stringr)
+library(hunspell)
+library(reshape2) #dcast
+library(tidyr) #pivot_wider
+library(tidytext)
+library(tidymodels)
+library(stargazer)
+library(rempsyc)
+```
+
+```{r Importing MasterSheetR}
+MasterSheetR <- read_xlsx("~/Data - Dissertation/Task Data/MasterSheet_Data.xlsx", sheet = "R-MasterSheet", col_names = T, )
+x <- c(colnames(MasterSheetR[,3:9]),"Injury_Severity",colnames(MasterSheetR[,21:30])) #THIS is super helpful for converting multiple cols that are next to each other! - 7/17/24
+MasterSheetR[x] <- sapply(MasterSheetR[x], as.numeric) #turning all columns in x into numeric
+```
+"Participant_Group","Age","Race","Sex","Years_of_Ed","Degree",
+```{r}
+# psych describe
+PsychStatsTable<- psych::describe(MasterSheetR)
+
+skimr::skim(MasterSheetR) # <3 very helpful descriptive summary!
+MasterSheetR %>% group_by(Participant_Group) %>% skimr::skim()
+
+head(MasterSheetR)
+summary(MasterSheetR)
+
+table(MasterSheetR$Degree) #table(dataset$qual_var) is really helpful for getting quick and basic freq numbers. 
+
+#ggplot(MasterSheetR, aes(x = )) + geom_histogram()
+#ggplot(dataset, aes(x = qual_var, y = quant_var)) + geom_boxplot()
+#ggplot(dataset, aes(x = quant_var1, y = quant_var2)) + geom_point()
+```
+
+## NSI Questionnaire Data
+NSI Scoring 0 = None – Rarely if ever present; not a problem at all 
+1 = Mild – Occasionally present, but it does not disrupt my activities; I can usually continue what I’m doing; doesn’t really concern me. 
+2 =Moderate – Often present, occasionally disrupts my activities; I can usually continue what I’m doing with some effort; I feel somewhat concerned. 
+3 = Severe – Frequently present and disrupts activities; I can only do things that are fairly simple or take little effort; I feel I need help.
+4 = Very Severe – Almost always present and I have been unable to perform at work, school or home due to this problem; I probably cannot function without help.
+
+```{r NSI Scoring}
+NSI <- read_xlsx("~/DemoData_DONOTOVERWRITE.xlsx",sheet = "NSI", col_names = T)
+NSI <- NSI %>% 
+  mutate(Total = totalNSI <- rowSums(NSI[,2:23], na.rm = T))
+
+TBI_AllData <-TBI_AllData %>%
+  mutate(NSI_score = NSI$Total)
+  
+rowSums(NSI[,2:23], na.rm = T)
+```
+Vestibular: 1:3 
+Somatosensory: 4:7, 9:11 
+Cognitive:13:16 
+Affective: 17:22 
+Unrelated: 8, 12
+Total score can range from 0 to 88. Higher scores indicating worse TBI
+symptomology.
+
+## TASK DATA CODE
+
+###AUT
+```{r Automated all raw AUT data in AUT task folder}
+AUT_raw <- read_xlsx("~/Data - Dissertation/4. Task Data/By Task/AUT.xlsx") %>%
+  filter(sender == "AUT Stimuli") %>%
+  select(c("AUT_response","ObjectName", "code", "duration","ended_on", "id", "sender"))
+AUT_raw <- AUT_raw[-(1:63),] #removing the pilot data
+
+AUT_raw <- AUT_raw %>%
+  mutate(PGroup = ifelse(grepl("TBI", AUT_raw$code, ignore.case = F), "TBI","HC")) %>%
+  relocate(PGroup, .after = code)
+```
+
+```{r AUT data cleaning}
+AUT_raw$code <- toupper(AUT_raw$code) #changing IDs to all uppercase 
+AUT_raw$AUT_response[is.na(AUT_raw$AUT_response)] <- "" # NAs are now empty
+AUT_raw$AUT_response <- tolower(AUT_raw$AUT_response) #changing responses to lower case (which will hopefully help with scoring)
+
+spellcheck <- hunspell_check(AUT_raw$AUT_response, dict = dictionary("en_US"))
+AUT_raw %>%
+  group_by(code) %>%
+  hunspell_suggest(AUT_raw$AUT_response[!spellcheck])
+```
+
+```{r finding repetitions}
+AUT_noblanks <- read_xlsx("~Data - Dissertation/Task Data/By TaskAUT_noblanks.xlsx", sheet = 1,col_names = T)
+# Finding identical words grouped by ID
+AUT_duplicates <- AUT_noblanks %>%
+  group_by(code) %>%
+  filter(duplicated(AUT_response) | duplicated(AUT_response, fromLast = T)) %>% arrange(code)
+```
+
+```{r Spelling corrections, eval=FALSE, include=FALSE}
+AUT_spelling <- AUT_noblanks %>%
+  group_by(code) %>%
+  mutate(spellcheck = hunspell(AUT_response, dictionary("en_US"))) #copied from SPT spellcheck
+
+spellcheck <- hunspell_check(AUT_Rawscored$AUT_response, dict = dictionary("en_US"))
+```
+
+#### Scoring & Analysis
+```{r AUT importing scored sheet}
+AUT_Rawscored <- read_xlsx("~/Data - DissertationTask Data/By Task/AUT/AUT_scoring.xlsx", sheet = 1, col_names = T)
+
+#Total Originality
+AUT_scored <- AUT_Rawscored %>% filter(ViableResponse ==1) %>% aggregate(originality ~ code + PGroup, FUN = sum, na.rm = T) %>% rename(SumOriginality = originality)
+
+
+#Avg Originality - Answered trials
+#fixed to remove omits but keep errors
+AUT_avgOAnswered <- AUT_Rawscored %>% filter(originality != 0.0) %>% aggregate(cbind(originality, duration) ~ code + PGroup, FUN = mean, na.rm = T) %>% rename(AvgOAnswered = originality, RT_AvgOAnswered = duration)
+AUT_scored <- left_join(AUT_scored, AUT_avgOAnswered, by = c("code", "PGroup"))
+
+#Avg Originality
+#fixed to remove errors and omits
+AUT_avgOrigin <- AUT_Rawscored %>% filter(ViableResponse ==1) %>% aggregate(cbind(originality, duration) ~ code + PGroup, FUN = mean, na.rm = T) %>% rename(AvgOrigin = originality, RT_AvgOrigin = duration)
+AUT_scored <- left_join(AUT_scored, AUT_avgOrigin, by = c("code", "PGroup"))
+
+#Total Errors - exclude Omit
+AutError1 <- AUT_Rawscored %>% filter(originality != 0.0) %>%
+  group_by(code) %>% summarize(RepErrorTotal = sum(ViableResponse == 0))
+AUT_scored <- left_join(AUT_scored, AutError1, by = "code")
+
+#Total Omits
+AutError2 <- AUT_Rawscored %>% filter(originality == 0.0) %>%
+  group_by(code) %>% summarize(OmitTotal = sum(ViableResponse == 0))
+AUT_scored <- left_join(AUT_scored, AutError2, by = "code")
+```
+
+```{r AUT descriptives}
+AUTavg <- AUT_scored %>%
+  aggregate(cbind(ViableResponse, duration)~code + PGroup, FUN = mean, na.rm = T)
+
+test <- describeBy(AUT_scored, AUT_scored$PGroup)
+
+stargazer(AUTavg, type = "text", title = "AUT Descriptive Statistics", digits = 2, out = "table1.txt", covariate.labels = c("Accuracy", "Trial Duration"), median = T)
+```
+
+```{r AUT ttests}
+#Accuracy b/w groups
+t.test(AUTavg$ViableResponse ~ AUTavg$PGroup, paired = F, alternative = "two.sided", var.equal = F)
+#RT b/w groups
+t.test(AUTavg$duration ~ AUTavg$PGroup, paired = F, alternative = "two.sided", var.equal = F)
+```
+
+From Creative Huddle's page on AUT:
+Fluency – the number of alternative uses you can think of.
+Originality – how unusual those uses are – evidence of ‘thinking different'.
+Flexibility – the range of ideas, in different domains and categories.
+Elaboration – level of detail and development of the idea.
+
+###DKEFS
+```{r raw DKEFS task data automated into one df}
+DKEFS_raw <- read_xlsx("~/Data - Dissertation/4. Task Data/By Task/DKEFS.xlsx") %>%
+  filter(sender == "DKEFs ST Stimuli") %>%
+  select(c( "code", "Group1","Group1rule", "Group2", "Group2rule", "ST Trial", "duration","ended_on", "sender"))
+
+DKEFS_raw <- DKEFS_raw %>%
+  mutate(PGroup = ifelse(grepl("TBI", DKEFS_raw$code, ignore.case = F), "TBI","HC")) %>% relocate(PGroup, .after = code) #Adding PGroup and relocating it.
+```
+
+```{r DKEFS data cleaning Part 1}
+DKEFS_raw[is.na(DKEFS_raw)] <- "" #all NAs are now empty *1/30/24 I'm keeping this is.na because DKEFS variables are mostly characters
+DKEFS_raw$code <- toupper(DKEFS_raw$code) 
+DKEFS_raw <- DKEFS_raw %>%
+  mutate(Group1rule = tolower(DKEFS_raw$Group1rule),#responses to lower case
+         Group2rule = tolower(DKEFS_raw$Group2rule),
+         Group1 = str_replace_all(Group1,'[[:punct:]]',''),
+         Group2 = str_replace_all(Group2,'[[:punct:]]','')) #removing punctuation characters. mutating more than one column in same fxn
+
+DKEFS_raw$Group1 <- str_remove_all(DKEFS_raw$Group1, " ")
+DKEFS_raw$Group2 <- str_remove_all(DKEFS_raw$Group2, " ") #removing all the spaces in between group numbers
+```
+
+```{r DKEFS cleaning Part 2}
+#June 21st 2024:
+# Function to sort digits within a string
+sort_digits <- function(x) {
+  sapply(strsplit(x, ""), function(y) {
+    paste(sort(as.numeric(y)), collapse = "")
+  })
+}
+# Apply the function to each cell in the data frame
+DKEFS_raw <- DKEFS_raw %>% mutate(Group1 = sapply(Group1, sort_digits))
+DKEFS_raw <- DKEFS_raw %>% mutate(Group2 = sapply(Group2, sort_digits))
+#Unsure if I still need this but turning char into num:
+DKEFS_raw$Group1 <- as.numeric(DKEFS_raw$Group1) 
+DKEFS_raw$Group2 <- as.numeric(DKEFS_raw$Group2)
+```
+
+#### Scoring & Analysis
+```{r Importing scored DKEFS}
+DKEFS_Rawscored <- read_xlsx("~/Data - DissertationTask Data/By Task/DKEFS/scoredDKEFS.xlsx", col_names = T, sheet = 1)
+
+DKEFS_Rawscored <- DKEFS_Rawscored %>% mutate(across(c(Group1score, Group2score), as.numeric)) #converting multiple cols to numeric 
+
+DKEFS_Rawscored <- DKEFS_Rawscored %>%
+  mutate(across(where(is.numeric), ~ replace_na(., 0))) 
+
+DKEFS_scored <- DKEFS_Rawscored %>% aggregate(cbind(Group1score, Group2score)~code + PGroup, FUN = sum, na.rm = T) %>% #Description Score sums
+  mutate(DescripeScore = Group1score + Group2score)
+
+tempresult <- DKEFS_Rawscored %>%
+  group_by(code) %>% #summarizing Group1 and also Group2 to get acc count
+  summarize(AccCountGroup1 = sum(Group1score != 0), 
+            AccCountGroup2 = sum(Group2score != 0)) %>%
+  mutate(AccTotal = AccCountGroup1 + AccCountGroup2)
+#now these can be moved onto the end of DKEFS_scored. 
+
+DKEFS_scored <- left_join(DKEFS_scored, tempresult, by = 'code') #combining the two acc dfs (easier for exporting)
+```
+
+```{r DKEFS descriptives + aggregating}
+#DKEFS_avg <- DKEFS_scored %>% aggregate(cbind(correct, duration)~code + PGroup, FUN = mean, na.rm = T)
+describeBy(DKEFS_avg, group = DKEFS_avg$PGroup)
+```
+
+```{r DKEFS ttests}
+#Accuracy b/w groups
+t.test(DKEFS_avg$correct ~ DKEFS_avg$PGroup, paired = F, alternative = "two.sided", var.equal = F)
+#RT b/w groups
+t.test(DKEFS_avg$duration ~ DKEFS_avg$PGroup, paired = F, alternative = "two.sided", var.equal = F)
+```
+
+###GNG
+```{r Dec 6 limitations comb through}
+# Assuming your dataset is called `data` and has columns `Participant_ID`, `id`, and `duration`
+GNG_gotrialcheck <- GNG_raw %>%
+  filter(id == "Go", duration > 700) %>% # Filter rows where id == "Go" and duration > 700ms
+  group_by(code) %>%          # Group by participant
+  summarise(count700 = n()) # Count the number of such trials for each participant
+
+x <- GNG_raw %>% filter(id == "Go") %>% group_by(code) %>% summarise(countGo = n())
+
+GNG_gotrialcheck <- GNG_gotrialcheck %>%
+  left_join(x, by = "code") # Merge by Participant code
+```
+
+```{r raw GNG task data automated into df}
+GNG_raw <- read_xlsx("~/Data - Dissertation/4. Task Data/By Task/GNG.xlsx") %>%
+  filter(sender == "GNG Stimuli") %>%
+  select(c("Trial", "code", "duration", "ended_on", "id", "response", "response_action", "sender"))
+GNG_raw <- GNG_raw[-(1:120),] #removing the pilot data
+GNG_raw <- GNG_raw %>%
+  mutate(PGroup = ifelse(grepl("TBI", GNG_raw$code, ignore.case = T), "TBI","HC")) %>% relocate(PGroup, .after = code) %>% #Adding PGroup and relocating it.
+  relocate(Trial, .after = PGroup)
+```
+
+```{r GNG data cleaning}
+GNG_raw$response[is.na(GNG_raw$response)] <- "" #all NAs are now empty !Needed for accuracy calculation below
+GNG_raw$code <- toupper(GNG_raw$code) #changing IDs to all uppercase 
+
+GNG_raw <- GNG_raw[!(GNG_raw$code %in% "1626733374"),] #removing this person
+```
+
+```{r raw, per PT, GNG descriptives, include=FALSE, eval=FALSE}
+describeBy(GNG_raw, GNG_raw$code
+tapply(GNG_raw$duration, GNG_raw$code, summary) #THIS WORKS! :) 
+```
+Summary by group using tapply: tapply(data$x, data$group, summary)\
+x is the column with the data, group is the column I want to group by
+
+#### Scoring & Analysis
+```{r Scoring GNG for accuracy}
+GNG_raw$accuracy <- if_else((GNG_raw$response == 'Response'& GNG_raw$id == "Go")|(GNG_raw$response == ''& GNG_raw$id == "NoGo"),1,0) 
+#above is specifically determining if a trial was answered correctly or incorrectly (1 or 0) for sanity's sake, this does not also determine if an error was a co-mission or an omission.
+
+#Total Accuracy GNG
+GNGacc <- aggregate(GNG_raw, accuracy ~ code, FUN = "mean")
+```
+Grouping doesn't change how the data looks. It changes how it acts with
+the other dplyr verbs
+
+```{r GNG Scoring part 2}
+#Overall Mean: accuracy and duration, by PT code:
+GNGacc <- GNG_raw %>% 
+  aggregate(cbind(accuracy, duration)~code + PGroup, FUN = mean, na.rm = T) %>%
+  rename(Acc_Total = accuracy, RT_Total = duration)
+
+#Mean: accuracy and duration, by PT code and Stimuli type:
+GNGacc2 <- GNG_raw %>% 
+  aggregate(cbind(accuracy, duration) ~ id + code, FUN = mean, na.rm = T)
+
+GNGacc2 <- pivot_wider(GNGacc2, id_cols = code, names_from = id, values_from = c(accuracy, duration), values_fill = 0) %>%
+  rename(Acc_Go = accuracy_Go, Acc_NoGo = accuracy_NoGo, RT_Go = duration_Go, RT_NoGo = duration_NoGo)
+
+GNGacc2 <- GNGacc2 %>% mutate(PGroup = ifelse(grepl("TBI", GNGacc2$code, ignore.case = F), "TBI","HC")) %>% relocate(PGroup, .after = code) #Added this additional mutated PGroup line b/c I want group for analysis.
+
+GNGacc <- left_join(GNGacc, GNGacc2, by = c("code","PGroup")) #combining the two acc dfs (easier for exporting)
+```
+
+```{r GNGacc descriptives part 1: Overalls per PGroup}
+# Method 1: layout- good, details given- great
+describeBy(GNGacc, GNGacc$PGroup) 
+# Method 2: layout- good, details given- basic 
+tapply(GNGacc, GNGacc$PGroup, summary) 
+```
+
+```{r GNGacc2 descriptives part 2: per group AND response/error}
+#Method 1: same as acc
+my_descriptions <- describeBy(GNGacc2,GNGacc2$PGroup) 
+# Method 2: same as acc 
+tapply(GNGacc2, GNGacc$PGroup, summary)
+```
+
+```{r GNG t-tests}
+#Overall Acc and RT t-test
+#Accuracy Overall b/w groups
+t.test(GNGacc$Acc_Total ~ GNGacc$PGroup, paired = F, alternative = "greater", var.equal = F)
+#RT Overall b/w groups
+t.test(GNGacc$RT_Total ~ GNGacc$PGroup,paired = F, alternative = "less", var.equal = F)
+
+#Comparing Accuracy of response/error b/w groups - MANOVA
+model1 <- aov(cbind(Acc_Go, Acc_NoGo) ~ GNGacc2$PGroup, data = GNGacc2)
+summary.aov(model1)
+#t.tests of same ^
+t.test(GNGacc2$Acc_Go ~ GNGacc2$PGroup,paired = F, alternative = "two.sided", var.equal = F)
+t.test(GNGacc2$Acc_NoGo ~ GNGacc2$PGroup,paired = F, alternative = "greater", var.equal = F)
+#Comparing RT of response/error b/w groups - MANOVA
+model2 <- manova(cbind(RT_Go, RT_NoGo) ~ GNGacc2$PGroup, data = GNGacc2)
+summary.manova(model2)
+summary.aov(model2)
+#t.tests of same ^
+t.test(GNGacc2$RT_Go ~ GNGacc2$PGroup,paired = F, alternative = "two.sided", var.equal = F)
+#t.tests of same ^
+t.test(GNGacc2$RT_NoGo ~ GNGacc2$PGroup,paired = F, alternative = "two.sided", var.equal = F)
+```
+From Andy Fields book:
+newModel <- t.test(outcome ~ predictor, data = dataFrame, paired = T/F)
+
+###SPT Snowy Picture Task
+```{r raw SPT task data automated into df}
+SPT_raw <- read_excel("~/Data - Dissertation/Task Data/By Task/SPT.xlsx") %>%
+  filter(sender == "SPT Stimuli") %>%
+  select(c("SPT_response", "code", "duration", "ended_on", "imgname", "sender"))
+SPT_raw <- SPT_raw[-(1:24),] #removing the pilot data
+SPT_raw <- SPT_raw %>%
+  mutate(PGroup = ifelse(grepl("TBI", SPT_raw$code, ignore.case = F), "TBI","HC")) %>% relocate(PGroup, .after = code) %>% #Adding PGroup and relocating it.
+  relocate(SPT_response, .after = PGroup)
+```
+
+```{r SPT data cleaning}
+SPT_raw$SPT_response[is.na(SPT_raw$SPT_response)] <- "" #all NAs are now empty
+
+SPT_raw$code <- toupper(SPT_raw$code) #changing IDs to all uppercase *either this or the follow code work, this is cleaner but below can be built into a larger code (i.e., what AK did)
+SPT_raw$SPT_response <- tolower(SPT_raw$SPT_response)
+SPT_raw <- SPT_raw %>%
+  mutate(SPT_response = str_replace_all(SPT_raw$SPT_response,'[[:punct:]]','')) 
+#removing punctuation characters  
+
+SPT_raw <- SPT_raw %>% #Adding col with trial numbers 
+  group_by(code) %>%
+  mutate(Trial = row_number()) 
+```
+
+
+```{r SPT processing}
+SPT_raw <- SPT_raw %>%
+  group_by(code) %>%
+  mutate(spellcheck = hunspell_check(SPT_response, dict = dictionary("en_US")))
+
+SPT_raw %>%
+  group_by(code) %>%
+  hunspell_suggest(SPT_raw$SPT_response[!spellcheck])
+```
+
+#### Scoring & Analysis
+```{r SPT scoring}
+SPT_scorekey <- read_xlsx("~/Dissertation/SPT/SPT Scoring.xlsx", sheet = 1, col_names = T)
+
+#merging
+SPT_raw <- left_join(SPT_raw, SPT_scorekey, by = "Trial")
+SPT_raw <- SPT_raw %>%
+  mutate(correct = case_when(SPT_response == CR1 ~ 1,
+                             SPT_response == CR2 ~ 1,
+                             SPT_response == CR3 ~ 1, TRUE ~ 0))
+```
+
+```{r importing scored SPT}
+SPT_ready <- read_xlsx("~/Data - Dissertation/Task Data/By Task/SPT.xlsx", col_names = T, sheet = 1)
+```
+
+```{r Aggragating SPT: trial --> participant}
+SPTavg <- SPT_ready %>% 
+  aggregate(cbind(correct, duration) ~ code + PGroup, FUN = mean, na.rm = T ) 
+```
+
+```{r SPT Descrptives: by group}
+describeBy(SPTavg, SPTavg$PGroup)
+```
+
+```{r SPT ttests}
+#Accuracy Overall b/w groups
+t.test(SPTavg$correct ~ SPTavg$PGroup, paired = F, alternative = "two.sided", var.equal = F)
+#RT Overall b/w groups
+t.test(SPTavg$duration ~ SPTavg$PGroup,paired = F, alternative = "two.sided", var.equal = F)
+```
+
+###WCST
+```{r raw WCST task data automated into df}
+WCST_raw <- read_xlsx("~/Task Data/By Task/WCST.xlsx") %>%
+  filter(sender != "Fixation" & sender != "Welcome!") %>% 
+  filter(!sender %in% c("InitializationScript","RandomizationScript")) %>% 
+  filter(sender != str_detect(sender, "Instructions_")) %>% 
+  select(c("code", "condition", "trial", "correct", "correctResponse", "response",
+           "sender", "ended_on","duration", "n_correct", "n_errors",
+           "n_non_perservation", "n_perservation", "n_timeout", 
+           "n_trials","perservation", "stimuli", "response_action"))
+WCST_raw$code <- toupper(WCST_raw$code) #changing IDs to all uppercase 
+WCST_raw <- WCST_raw %>%
+  mutate(PGroup = ifelse(grepl("TBI", WCST_raw$code, ignore.case = F), "TBI","HC")) %>% relocate(PGroup, .after = code) #Adding PGroup and relocating it.
+```
+
+#### Scoring & Analysis
+```{r WCST data summaries}
+WCST_sum <- WCST_raw %>% 
+  group_by(code) %>%
+  summarize(n_correct = max(n_correct, na.rm = T), 
+            n_errors = max(n_errors, na.rm = T), 
+            n_non_perservation = if(all(is.na(n_non_perservation))) NA_real_ else max(n_non_perservation, na.rm = T), 
+            n_perservation = max(n_perservation, na.rm = T), 
+            n_timeout = if(all(is.na(n_timeout))) NA_real_ else max(n_timeout, na.rm = T))  #n_non_per and n_timeout both have pts with NA for all trials which leads summarize to -inf (b/c it can't get the max of nothing) 
+
+WCSTavg <- WCST_raw %>% 
+  filter(!is.na(trial) & sender == "Task") %>% #filtering out the practice trials then aggregating RT 
+  aggregate(duration ~ code + PGroup, FUN = mean, na.rm = T )
+WCSTavg <- left_join(WCSTavg, WCST_sum, by = "code")
+```
+
+```{r WCST descriptives}
+describeBy(WCSTavg, WCSTavg$PGroup)
+```
+
+```{r WCST ttests}
+#RT Overall b/w groups
+t.test(WCSTavg$duration ~ WCSTavg$PGroup, paired = F, alternative = "two.sided", var.equal = F)
+#Accuracy Overall b/w groups - n-correct
+t.test(WCSTavg$n_correct ~ WCSTavg$PGroup, paired = F, alternative = "greater", var.equal = F)
+#Non-Perseveration errors b/w groups - n-non-perseveration
+t.test(WCSTavg$n_non_perservation ~ WCSTavg$PGroup, paired = F, alternative = "two.sided", var.equal = F)
+#Perseveration errors b/w groups - n-perseveration
+t.test(WCSTavg$n_perservation ~ WCSTavg$PGroup, paired = F, alternative = "greater", var.equal = F)
+```
+
+###Water Jar
+```{r raw WJ task data automated into df}
+WJ_raw <- read_xlsx("~/Data - Dissertation/Task Data/By Task/WJ.xlsx", na = "") %>%
+  filter(sender == "Water Jar Set Stim"| sender == "Water Jar Flex Stim") %>%
+  select(c("Q_Position", "code", "correct", "duration", "ended_on", "imgname", "sender", "variableA", "variableB", "variableC"))
+#FIXED: I was missing the Flex Stim in the filtering, the | works with filter but grammatically it needs "sender ==" both times to understand the statement. 
+WJ_raw$code <- toupper(WJ_raw$code) #changing IDs to all uppercase 
+
+WJ_raw <- WJ_raw %>% #Adding PTgroup column and relocating it. 
+  mutate(PTgroup = ifelse(grepl("TBI", WJ_raw$code, ignore.case = F), "TBI","HC")) %>%
+  relocate(PTgroup, .after = code) %>%
+  relocate(Q_Position, .after = PTgroup)
+
+WJ_raw$code[WJ_raw$code == "TBIO41"] <- "TBI041" #using base R to fix typo
+```
+
+```{r Water Jar data cleaning}
+WJ_raw <- WJ_raw[!(WJ_raw$code %in% "1626733374"),] #removing this person
+WJ_raw$variableA <- as.numeric(WJ_raw$variableA) 
+WJ_raw$variableB <- as.numeric(WJ_raw$variableB) 
+WJ_raw$variableC <- as.numeric(WJ_raw$variableC) 
+WJ_raw$correct <- as.numeric(WJ_raw$correct) 
+
+#Creating new column with the question type, this should make subsequent scoring easier. 
+WJ_raw <- WJ_raw %>%
+  mutate(QType = ifelse(grepl("Set", WJ_raw$imgname, ignore.case = F), "Set", ifelse(grepl("Critical", WJ_raw$imgname, ignore.case = F),"Critical","Extinction")))
+#This code uses stacked ifelse() statements. The second ifelse() is the 'if not' condition of the first ifelse(). *I choose to use ifelse() for simplicity, over if_else() 
+
+#Turning the NAs into zeros so they will be counted in the scoring
+WJ_raw[c("correct", "variableA", "variableB","variableC")][is.na(WJ_raw[c("correct", "variableA", "variableB","variableC")])] <- 0 
+
+#Simplifying Sender --> helpful for later code
+WJ_raw <- WJ_raw %>%
+  mutate(sender = ifelse(grepl("Water Jar Set Stim", WJ_raw$sender, ignore.case = F), "Set","Flex"))
+```
+
+#### Scoring & Analysis
+```{r Water Jar scoring}
+#It took A LOT, but I finally have WJ scoring!
+WJ_raw$correct <- ifelse((WJ_raw$QType == "Set" & WJ_raw$variableA == 1 & WJ_raw$variableB == 1 & WJ_raw$variableC == 2), 1, ifelse((WJ_raw$QType != "Set" & WJ_raw$variableA == 1 &  WJ_raw$variableC == 1), 1, 0))
+```
+
+```{r Water Jar scoring averages}
+WJacc <- aggregate(WJ_raw, correct ~ code, FUN = "mean")
+WJ1 <- aggregate(cbind(correct, duration) ~ code, data = WJ_raw, FUN = mean, na.rm = T) %>% 
+  rename(Acc_Total = correct, RT_Total = duration) #Renaming the columns bc aggregate uses the variable names that are given
+
+#remove "Water Jar " from sender datum
+WJ2 <- aggregate(cbind(correct, duration) ~ sender + code, data = WJ_raw, FUN = mean, na.rm = T) %>%
+  rename(Acc_StimType = correct, RT_StimType = duration) %>%
+  pivot_wider(id_cols = code, names_from = sender, values_from = c(Acc_StimType, RT_StimType), values_fill = 0) 
+
+WJ3 <- aggregate(cbind(correct, duration) ~ QType + code, data = WJ_raw, FUN = mean, na.rm = T) %>%
+  rename(Acc_QType = correct, RT_QType = duration)
+
+#WJ1,2,3 are good reshape/pivot dfs!
+WJ3 <- pivot_wider(WJ3, id_cols = code, names_from = QType, values_from = c(Acc_QType, RT_QType), values_fill = 0) 
+
+#A df of per PT averages!
+WJavg <- left_join(WJ1, WJ2, by = "code") 
+WJavg <- left_join(WJavg, WJ3, by = "code")
+  
+WJavg <- WJavg %>%
+  mutate(PTgroup = ifelse(grepl("TBI", WJavg$code, ignore.case = F), "TBI","HC")) %>%
+  relocate(PTgroup, .after = code)
+#Adding a PT group column to make analysis easier. I'll probably add this in to the top of each DF, but I'm keeping this one here because I don't want to go back and adjust this block of scoring code to also include group and code into each step. It's fine if it's also done at the end. 
+```
+
+```{r WJ Cleaning/Scoring part 2?}
+WJ_PersevScoring <- read_xlsx("~/Data - Dissertation/4. Task Data/By Task/WJ.xlsx", col_names = T)
+WJ_PersevScoring <- WJ_PersevScoring %>%
+  mutate(across(where(is.numeric), ~ replace_na(., 0))) #replacing NAs with 0 because aggregate doesn't like working with a bunch of NAs
+
+WJsum_PersevScoring <- aggregate(cbind(SetEst, Persev, ExtinctShift, FailureToMaintainSet) ~ code, data = WJ_PersevScoring, FUN = sum, na.rm = T) #Note that this is aggregating to find a sum of varaibles not mean. (FUN=sum)
+
+WJavg <- left_join(WJavg, WJsum_PersevScoring, by = "code")
+```
+
+```{r IDing Set scores of 0}
+# Function to calculate SetEstablish
+calculate_set_establish <- function(data) {
+  data %>%
+    filter(QType == "Set") %>%                  
+    group_by(code) %>%                          
+    summarize(total_correct = sum(correct)) %>%
+    mutate(SetEstablish = case_when(
+      total_correct %in% c(0, 1) ~ 0,
+      total_correct %in% c(4, 5) ~ 1,
+      total_correct %in% c(2, 3) ~ NA_real_    # Leave empty for 2 or 3
+    ))
+}
+
+result <- calculate_set_establish(WJ_PersevScoring)
+View(result)
+
+#Use function below :)
+#Updated the above function to account for Set scores of 2 and 3
+calculate_set_establish <- function(data) {
+  data %>%
+    filter(QType == "Set") %>%         
+    group_by(code) %>%  
+    mutate(is_Q4_5_correct = ifelse(Q_Position %in% c(4, 5) & correct == 1, 1, 0)) %>%
+    summarize(
+      total_correct = sum(correct),           
+      Q4_5_correct = sum(is_Q4_5_correct)       # Check if correct for Q4 & Q5
+    ) %>%
+    mutate(SetEstablish = case_when(            # Assign SetEstablish based on total_correct
+      total_correct %in% c(0, 1) ~ 0,           # Set to 0 for total_correct 0 or 1
+      total_correct %in% c(4, 5) ~ 1,           # Set to 1 for total_correct 4 or 5
+      total_correct %in% c(2, 3) & Q4_5_correct == 2 ~ 1,  # Set to 1 if Q4 & Q5 are correct
+      total_correct %in% c(2, 3) & Q4_5_correct != 2 ~ 0   # Set to 0 if Q4 & Q5 are not both correct
+    ))
+}
+
+result <- calculate_set_establish(WJ_PersevScoring)
+View(result)
+
+WJavg <- left_join(WJavg, result, by = "code")
+```
+
+```{r Creating weighted WJ perseveration scores}
+#Aug 22 2024
+# Function to calculate PersevScore
+calculate_persev_score <- function(data) {
+  data %>%
+    mutate(PersevScore = case_when(
+      sender == "Flex" & Q_Position %in% c(1, 2) & Persev == 1 ~ 1,   # Part 1: Set to 1
+      sender == "Flex" & Q_Position %in% c(4, 5) & Persev == 1 ~ 2,    # Part 2: Set to 2
+      sender == "Flex" & Persev == 0 ~ 0                              # Additional: Set to 0 for all other cases with persev == 0
+    ))
+}
+# Example usage:
+result2 <- calculate_persev_score(WJ_PersevScoring)
+View(result)
+
+WJsum_PersevScoring2 <- aggregate(PersevScore ~ code, data = result2, FUN = sum, na.rm = T) #Note, this is aggregating to find a sum. (FUN=sum)
+WJavg <- left_join(WJavg, WJsum_PersevScoring2, by = "code")
+```
+
+```{r WJ Descriptives}
+describeBy(WJavg, WJavg$PTgroup)
+```
+
+```{r WJ ttests}
+#Part 1
+#Accuracy Overall b/w groups
+t.test(WJavg$Acc_Total ~ WJavg$PTgroup, paired = F, alternative = "two.sided", var.equal = F)
+#RT Overall b/w groups
+t.test(WJavg$RT_Total ~ WJavg$PTgroup, paired = F, alternative = "two.sided", var.equal = F) 
+
+#Part 2
+#Comparing Accuracy for StimType Flex/ Set, b/w groups - MANOVA
+model1 <- manova(cbind(Acc_StimType_Flex, Acc_StimType_Set) ~ WJavg$PTgroup, data = WJavg)
+summary.manova(model1)
+summary.aov(model1)
+#t.tests of same ^
+t.test(WJavg$Acc_StimType_Flex ~ WJavg$PTgroup, paired = F, alternative = "two.sided", var.equal = F)
+t.test(WJavg$Acc_StimType_Set ~ WJavg$PTgroup, paired = F, alternative = "two.sided", var.equal = F)
+
+#Comparing RT for StimType Flex/Set, b/w groups - MANOVA
+model2 <- manova(cbind(RT_StimType_Flex, RT_StimType_Set) ~ WJavg$PTgroup, data = WJavg)
+summary.manova(model2)
+summary.aov(model2)
+#t.tests of same ^
+t.test(WJavg$RT_StimType_Flex ~ WJavg$PTgroup, paired = F, alternative = "two.sided", var.equal = F)
+#t.tests of same ^
+t.test(WJavg$RT_StimType_Set ~ WJavg$PTgroup, paired = F, alternative = "two.sided", var.equal = F)
+
+#Part 3
+#Comparing Accuracy for QType, b/w groups - MANOVA
+model3 <- manova(cbind(Acc_QType_Set, Acc_QType_Critical, Acc_QType_Extinction) ~ WJavg$PTgroup, data = WJavg)
+summary.manova(model3)
+summary.aov(model3)
+#t.tests of same ^
+t.test(WJavg$Acc_QType_Set ~ WJavg$PTgroup, paired = F, alternative = "two.sided", var.equal = F)
+t.test(WJavg$Acc_QType_Critical ~ WJavg$PTgroup, paired = F, alternative = "two.sided", var.equal = F)
+t.test(WJavg$Acc_QType_Extinction ~ WJavg$PTgroup, paired = F, alternative = "two.sided", var.equal = F)
+
+#Comparing RT for QType, b/w groups - MANOVA
+model4 <- manova(cbind(RT_QType_Set, RT_QType_Critical, RT_QType_Extinction) ~ WJavg$PTgroup, data = WJavg)
+summary.manova(model4)
+summary.aov(model4)
+#t.tests of same ^
+t.test(WJavg$RT_QType_Set ~ WJavg$PTgroup, paired = F, alternative = "two.sided", var.equal = F)
+t.test(WJavg$RT_QType_Critical ~ WJavg$PTgroup, paired = F, alternative = "two.sided", var.equal = F)
+t.test(WJavg$RT_QType_Extinction ~ WJavg$PTgroup, paired = F, alternative = "two.sided", var.equal = F)
+```
